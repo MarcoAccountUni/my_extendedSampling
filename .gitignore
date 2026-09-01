@@ -1,0 +1,14 @@
+customs/
+
+**/__pycache__/
+*.pyc
+
+softmax/monte_carlo/logs/
+softmax/monte_carlo/logs_dt/
+softmax/monte_carlo/logs_fixed_tau/
+softmax/monte_carlo/logs_lambda/
+softmax/monte_carlo/logs_tau/
+
+softmax/monte_carlo/tests/
+
+*.log

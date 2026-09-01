@@ -1,0 +1,6 @@
+# STRUCTURE PREDICTION SETTINGS:
+schedule    cosine		#schedule for the extraction of the structure tokens (see esm library)
+strategy    entropy		#strategy for the extraction of the structure tokens (see esm library)
+num_steps   10			#number of steps for full structure prediction (coordinates and plddt)
+d0          8.0			#threshold distance to extract contact map from predicted coordinates
+infer_cbeta 1			#boolean variable, whether to infer the cbeta atom position in the structure prediction (if possible) (1) or not (0, default)
