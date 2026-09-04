@@ -11,4 +11,7 @@ softmax/monte_carlo/logs_tau/
 
 softmax/monte_carlo/tests/
 
+
+softmax/code/classes/ep_sampler_am_backup.py
+
 *.log

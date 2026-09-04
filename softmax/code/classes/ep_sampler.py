@@ -17,7 +17,7 @@ from .ExtendedProtein import ExtendedProtein
 from generator.custom_generator import CustomGenerator
 from utils.general import create_path
 from utils.predictions import init_structure_config      #, predict_structure          | (for now, no contact
-from utils.energies import compute_U_am, compute_entropy #, compute_U_cm, compute_FoC  |  maps are computed)
+from utils.energies import compute_U_structure_ce, compute_entropy #, compute_U_cm, compute_FoC  |  maps are computed)
 from utils.operations import compute_Hd, mutate, is_subset, merge_dict
 
 
@@ -39,6 +39,9 @@ class ExtendedProteinSampler():
 		# The next commented line is necessary only for the first login
 		#login()
 		self.model: ESM3InferenceClient = ESM3.from_pretrained("esm3-open")
+
+		self.model.eval()	#setta il modello in modalità di valutazione (disabilita dropout e batch normalization)
+
 		for param in self.model.parameters():
 			param.requires_grad = False
 
@@ -76,6 +79,74 @@ class ExtendedProteinSampler():
 
 			# Compute observables of proposed state
 			obs, eprot = self._compute_observables(eprot, pars, backward=False)
+
+			obs, eprot = self._compute_observables(eprot, pars, backward=False)
+
+			# ============================================================
+			# TEST GRADIENT FLOW
+			# ============================================================
+
+			obs_test, eprot_test = self._compute_observables(
+				eprot,
+				pars,
+				backward=True,
+			)
+
+			print("U =", obs_test)
+			print("requires_grad =", eprot_test.logits.requires_grad)
+			print("grad is None =", eprot_test.logits.grad is None)
+			print(
+				"grad finite =",
+				torch.isfinite(eprot_test.logits.grad).all().item()
+			)
+			print(
+				"grad norm =",
+				eprot_test.logits.grad.norm().item()
+			)
+
+			# ============================================================
+			# TEST REFERENCE STRUCTURE TOKENS
+			# ============================================================
+
+			print(
+				"ref structure tokens shape:",
+				self.ref_structure_tokens.shape
+			)
+			print(
+				"ref structure tokens dtype:",
+				self.ref_structure_tokens.dtype
+			)
+			print(
+				"min token:",
+				self.ref_structure_tokens.min().item()
+			)
+			print(
+				"max token:",
+				self.ref_structure_tokens.max().item()
+			)
+
+			# ============================================================
+			# TEST REFERENCE CE
+			# ============================================================
+
+			ref_probs = self.ref_eprot.get_probs(pars["T_sftm"])
+			
+
+			with torch.no_grad():
+				ref_logits = self._get_structure_logits(ref_probs)
+
+			ref_ce = compute_U_structure_ce(
+				ref_logits[:, 1:-1, :],
+				self.ref_structure_tokens,
+			)
+
+			print("Reference CE =", ref_ce.item())
+
+			# ============================================================
+			# FINE TEST
+			# ============================================================
+
+			eprot.logits.grad = None
 
 			dU_acc = obs['U']-data['U']
 
@@ -130,8 +201,9 @@ class ExtendedProteinSampler():
 			self._extend_buffer(data)
 
 			# Save and/or print
-			if move%settings['log_step'] == 0:
-				self._save_log(eprot, data, settings)
+			#test
+			#if move%settings['log_step'] == 0:
+			#	self._save_log(eprot, data, settings)
 			if move%settings['print_step'] == 0:
 				self._print_status(data)
         
@@ -162,11 +234,11 @@ class ExtendedProteinSampler():
 					except ValueError:
 						raise ValueError(f"{self.name}.setup(): pars '{key}' type should be {typ}, but found {type(pars[key])}.")
 
-		assert all([v>=0. for k,v in pars.items() if k in ["lambda_am", "lambda_S", "init_muts"]]), (
-			f'{self.name}._setup(): invalid value for one of the following keys ("lambda_am", "lambda_S", "init_muts"). Allowed values: v>=0.'
+		assert all([v>=0. for k,v in pars.items() if k in ["lambda_structure_ce", "lambda_S", "init_muts"]]), (
+			f'{self.name}._setup(): invalid value for one of the following keys ("lambda_structure_ce", "lambda_S", "init_muts"). Allowed values: v>=0.'
 		)
-		assert (pars["lambda_am"]>0.) or (pars["lambda_S"]>0.), (
-			f'{self.name}._setup(): invalid value for the keys "lambda_am" ({pars["lambda_am"]}) and "lambda_S" ({pars["lambda_S"]}). At least one must be positive.'
+		assert (pars["lambda_structure_ce"]>0.) or (pars["lambda_S"]>0.), (
+			f'{self.name}._setup(): invalid value for the keys "lambda_structure_ce" ({pars["lambda_structure_ce"]}) and "lambda_S" ({pars["lambda_S"]}). At least one must be positive.'
 		)
 		assert all([v>0. for k,v in pars.items() if k in ["moves", "T", "dt", "isteps", "M", "T_sftm", "eps"]]), (
 			f'{self.name}._setup(): invalid value for one of the following keys ("moves", "T", "dt", "isteps", "M", "T_sftm", "eps"). Allowed values: v>0.'
@@ -208,9 +280,31 @@ class ExtendedProteinSampler():
 				seed=pars["seed"],
 				device=settings["device"],
 		)
-		self.ref_eprot = ExtendedProtein(sequence=ref_seq, requires_grad=False, device=self.generator.device)
+
+		self.ref_eprot = ExtendedProtein(
+			sequence=ref_seq,
+			requires_grad=False,
+			device=self.generator.device
+		)
+
 		self.ref_eprot.expand()
-		self.ref_eprot.am = self.model.predict_attention(sequence_probs=self.ref_eprot.get_probs())
+
+		#self.ref_eprot.am = self.model.predict_attention(sequence_probs=self.ref_eprot.get_probs())
+
+		# ---------------------------------------------------------
+		# Reference structure tokens
+		# ---------------------------------------------------------
+
+		ref_probs = self.ref_eprot.get_probs(pars["T_sftm"])
+		if ref_probs.ndim == 2:
+			ref_probs = ref_probs.unsqueeze(0)
+
+		with torch.no_grad():		#token is just a constant, no need to compute gradients
+			ref_structure_logits = self._get_structure_logits(ref_probs)
+
+			self.ref_structure_tokens = ref_structure_logits.argmax(	#struttura riferimento: argmax
+				dim=-1
+			)[:, 1:-1]	#escludiamo BOS e EOS tokens
 
 
 		# 3. CLEAN
@@ -238,7 +332,7 @@ class ExtendedProteinSampler():
 			print(eprot.logits)
 			print(eprot.tokens)
 			print(eprot.sequence)
-			print(eprot.am)
+			#print(eprot.am)
 
 		else:
 			for d in [settings['results_dir'], settings['eprot_dir']]:
@@ -254,13 +348,13 @@ class ExtendedProteinSampler():
 			print(eprot.logits)
 			print(eprot.tokens)
 			print(eprot.sequence)
-			print(eprot.am)
+			#print(eprot.am)
 			
 			data = {
 				'move': 0,
 				'time': 0.,
 				'U': 0.,
-				'U_am': 0.,
+				'U_structure_ce': 0.,
 				'entropy': 0.,
 				'Hd_to_ref': 0,
 				'muts_move': 0,
@@ -282,7 +376,7 @@ class ExtendedProteinSampler():
 			)
 			data = self._correct_types(data, "data")
 			self._extend_buffer(data, header=True)
-			self._save_log(eprot, data, settings)
+			#test#self._save_log(eprot, data, settings)
 
 
 		self.t0 = ptime() - data["time"]
@@ -296,6 +390,57 @@ class ExtendedProteinSampler():
 			settings,
 		)
 
+
+	def _get_structure_logits(self, probs):
+
+		if probs.ndim == 2:
+			probs = probs.unsqueeze(0)
+
+		# Match the dtype expected by the ESM3 sequence embedding
+		probs = probs.to(dtype=self.model.encoder.sequence_embed.weight.dtype)
+
+		#TEST
+		print("probs dtype:", probs.dtype)
+		print(
+			"embedding dtype:",
+			self.model.encoder.sequence_embed.weight.dtype
+		)
+
+		L = probs.shape[1]
+
+		default_tokens, affine, affine_mask = self.model._default(
+			L + 2,
+			probs.device,
+		)
+
+		default_tokens = list(default_tokens)
+		default_tokens[1] = default_tokens[1].to(torch.bfloat16)
+		default_tokens[2] = default_tokens[2].to(torch.bfloat16)
+		default_tokens = tuple(default_tokens)
+
+		affine = affine.to(dtype=torch.bfloat16)
+
+		x = self.model.encoder.custom_forward(
+			probs,
+			*default_tokens,
+		)
+
+		with torch.autocast(
+			device_type="cuda",
+			dtype=torch.bfloat16,
+			enabled=probs.device.type == "cuda",
+		):
+			x, embedding, _ = self.model.transformer(
+				x,
+				sequence_id=None,
+				affine=affine,
+				affine_mask=affine_mask,
+				chain_id=None,
+			)
+
+			structure_logits = self.model.output_heads.structure_head(x)
+
+		return structure_logits
 
 
 	def _extract_and_integrate(
@@ -342,24 +487,64 @@ class ExtendedProteinSampler():
 	def _compute_observables(self, eprot, pars, backward=False):
 		# integration
 		if backward:
+
 			probs = eprot.get_probs(pars['T_sftm'])
-			am = self.model.predict_attention(sequence_probs=probs)
-			U_am = compute_U_am(am, self.ref_eprot.am)
-			entropy = compute_entropy(probs, pars['eps'])
-			U = pars['lambda_am']*U_am + pars["lambda_S"]*entropy
-			U.backward(retain_graph=True)
+
+			structure_logits = self._get_structure_logits(probs)
+
+			U_structure_ce = compute_U_structure_ce(
+				structure_logits[:, 1:-1, :],
+				self.ref_structure_tokens,
+			)
+
+			entropy = compute_entropy(
+				probs,
+				pars['eps']
+			)
+
+			U = (													#energia totale
+				pars['lambda_structure_ce'] * U_structure_ce
+				+ pars["lambda_S"] * entropy
+			)
+
+			U.backward(retain_graph=True)							#backpropagation: calcolo gradiente di U rispetto a logits (logits.grad)
+
 			return U.item(), eprot
         
-		# sampling
+		# sampling										#accettazione
 		else:
-			am = self.model.predict_attention(sequence_probs=eprot.get_probs())
-			U_am = compute_U_am(am, self.ref_eprot.am)                               #The attention energy is computed on the closest sequence,
-			U = pars['lambda_am']*U_am                                               #therefore the total energy is equal to the attention energy.
-			entropy = compute_entropy(eprot.get_probs(pars['T_sftm']), pars['eps'])  #The entropy value (for data storing) is instead computed on the current logits.
-			Hd_to_ref = compute_Hd(eprot.logits, self.ref_eprot.logits)
-			eprot.am = am.detach().clone().to("cpu")
-			return {'U':U.item(), 'U_am':U_am.item(), 'entropy':entropy.item(), 'Hd_to_ref': Hd_to_ref}, eprot
-    
+
+			probs = eprot.get_probs(pars['T_sftm'])
+
+			structure_logits = self._get_structure_logits(probs)
+
+			U_structure_ce = compute_U_structure_ce(
+				structure_logits[:, 1:-1, :],
+				self.ref_structure_tokens,
+			)
+
+			U = (
+				pars['lambda_structure_ce'] * U_structure_ce
+			)
+
+			entropy = compute_entropy(
+				probs,
+				pars['eps']
+			)
+
+			Hd_to_ref = compute_Hd(
+				eprot.logits,
+				self.ref_eprot.logits
+			)
+
+			return {
+				'U': U.item(),
+				'U_structure_ce': U_structure_ce.item(),
+				'entropy': entropy.item(),
+				'Hd_to_ref': Hd_to_ref
+			}, eprot
+			
+    ########
 	def _compute_K(self, p, m):
 		return (p**2.).sum().item() / (2.*m)
 
@@ -373,7 +558,7 @@ class ExtendedProteinSampler():
 				"# move        : Monte Carlo move number\n"
 				"# time        : CPU time elapsed since simulation start [s]\n"
 				"# U           : potential energy of the current accepted sequence\n"
-				"# U_am        : attention-map contribution to U\n"
+				"# U_structure_ce        : cross entropy contribution to U\n"
 				"# entropy     : Shannon entropy of the softmax probabilities\n"
 				"# Hd_to_ref   : Hamming distance between current accepted sequence and reference sequence\n"
 				"# muts_move   : Hamming distance between proposed sequence and previous accepted sequence\n"
@@ -455,7 +640,7 @@ class ExtendedProteinSampler():
 		lines.append(f'# per-move integration steps: {pars["isteps"]:.0f}')
 		lines.append(f'# logits mass:                {pars["M"]:.2f}')
 		lines.append(f'# softmax temperature:        {pars["T_sftm"]:.2f}')
-		lines.append(f'# attention multiplier:       {pars["lambda_am"]:.1e}')
+		lines.append(f'# attention multiplier:       {pars["lambda_structure_ce"]:.1e}')
 		lines.append(f'# entropy multiplier:         {pars["lambda_S"]:.1e}')
 		lines.append(f'# ')
 		lines.append(f'# results directory: {settings["results_dir"]}')
@@ -506,7 +691,7 @@ class ExtendedProteinSampler():
 				"isteps": (100, int),
 				"M": (1.0, float),
 				"T_sftm": (0.1, float),
-				"lambda_am": (1.0, float),
+				"lambda_structure_ce": (1.0, float),
 				"lambda_S": (0.0, float),
 				"init_muts": (0, int),
 				"eps": (1.0e-9, float),
@@ -527,7 +712,7 @@ class ExtendedProteinSampler():
 			'sampling': [
 				['move',             'move',             0],
 				['U',                'U',                5],
-				['U_am',             'U_am',             5],
+				['U_structure_ce',   'U_structure_ce',   5],
 				['entropy',          'entropy',          5],
 				['Hd_to_ref',		 'Hd_to_ref',        0],
 				['new_proposal', 	 'new_prop',	     0],
