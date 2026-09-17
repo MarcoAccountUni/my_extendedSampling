@@ -1,11 +1,3 @@
-customs/*
-!customs/custom_esm/
-customs/custom_esm/*
-!customs/custom_esm/models/
-!customs/custom_esm/models/**
-!customs/custom_esm/pretrained.py
-
-
 **/__pycache__/
 *.pyc
 

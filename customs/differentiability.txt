@@ -1,0 +1,40 @@
+Loading ESM3...
+Embedding dtype: torch.bfloat16
+device: cuda
+model device: cuda:0
+SEQUENCE_USED_VOCAB: ['L', 'A', 'G', 'V', 'S', 'E', 'R', 'T', 'I', 'D', 'P', 'K', 'Q', 'N', 'F', 'Y', 'M', 'H', 'W', 'C', 'X', 'B', 'U', 'Z', 'O']
+len: 25
+P.requires_grad: True
+P.grad_fn: <SoftmaxBackward0 object at 0x7db52d5d8d30>
+
+Encoder output:
+  shape: torch.Size([1, 58, 1536])
+  requires_grad: True
+  grad_fn: <AddBackward0 object at 0x7db52d5d8d30>
+affine dtype: torch.bfloat16
+affine rot dtype: torch.float32
+affine trans dtype: torch.bfloat16
+affine_mask dtype: torch.bool
+
+Transformer output:
+  shape: torch.Size([1, 58, 1536])
+  requires_grad: True
+  grad_fn: <NativeLayerNormBackward0 object at 0x7db52d5da440>
+
+Structure logits:
+  shape: torch.Size([1, 58, 4096])
+  requires_grad: True
+  grad_fn: <ViewBackward0 object at 0x7db52d5da440>
+
+Energy:
+  U = 636.0
+  requires_grad: True
+  grad_fn: <MeanBackward0 object at 0x7db52d5da440>
+
+Gradient:
+  Z.grad is None: False
+  Z.grad shape: torch.Size([1, 56, 25])
+  Z.grad norm: 11.125
+  Z.grad min: -3.28125
+  Z.grad max: 5.03125
+  finite: True
