@@ -1,4 +1,10 @@
-customs/
+customs/*
+!customs/custom_esm/
+customs/custom_esm/*
+!customs/custom_esm/models/
+!customs/custom_esm/models/**
+!customs/custom_esm/pretrained.py
+
 
 **/__pycache__/
 *.pyc
@@ -10,7 +16,6 @@ softmax/monte_carlo/logs_lambda/
 softmax/monte_carlo/logs_tau/
 
 softmax/monte_carlo/tests/
-
 
 softmax/code/classes/ep_sampler_am_backup.py
 
